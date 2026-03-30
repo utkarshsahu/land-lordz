@@ -1,0 +1,10 @@
+langgraph
+langchain_openai
+langchain_core
+pandas
+google-search-results
+python-dotenv
+fastapi
+uvicorn[standard]
+httpx
+markdown
