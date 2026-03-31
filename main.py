@@ -7,13 +7,16 @@ POST /analyze
   Returns: { "status": str, "report_path": str, "summary": str }
 """
 
+import logging
 import os
 import re
+import traceback
 from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
 
@@ -24,6 +27,16 @@ from agents.auditor_agent import auditor_agent
 from agents.strategist_agent import strategist_agent
 
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Logging setup — INFO by default, DEBUG if LOG_LEVEL=DEBUG in env
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
 
 app = FastAPI(
     title="land-lordz",
@@ -87,18 +100,15 @@ def save_report(state: AgentState, request: AnalyzeRequest) -> str:
     filepath = REPORTS_DIR / filename
 
     header = f"""# Real Estate Investment Report
-**Query:** {request.query}
-**Location:** {request.location}
-**Property Type:** {request.property_type}
-**Budget:** ₹{request.budget_max_inr / 1e5:.0f} Lakhs
-**Generated:** {datetime.now().strftime("%B %d, %Y %H:%M")}
+    **Query:** {request.query}. 
+    **Location:** {request.location}. 
+    **Property Type:** {request.property_type}. 
+    **Budget:** ₹{request.budget_max_inr / 1e5:.0f} Lakhs. 
+    **Generated:** {datetime.now().strftime("%B %d, %Y %H:%M")}. 
+    ---"""
 
----
-
-"""
     filepath.write_text(header + state["strategy_report"], encoding="utf-8")
     return str(filepath)
-
 
 # ---------------------------------------------------------------------------
 # API endpoint
@@ -125,9 +135,12 @@ async def analyze(request: AnalyzeRequest):
         "report_path": "",
     }
 
+    log.info("[API] /analyze request — location=%r type=%r budget=%.0fL",
+             request.location, request.property_type, request.budget_max_inr / 1e5)
     try:
         final_state: AgentState = _graph.invoke(initial_state)
     except Exception as e:
+        log.error("[API] Agent pipeline failed:\n%s", traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Agent pipeline failed: {str(e)}")
 
     report_path = save_report(final_state, request)
@@ -160,4 +173,4 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="debug")

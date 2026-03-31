@@ -5,8 +5,10 @@ LangGraph node signature: (state: AgentState) -> dict
 Returns partial state update with: audit_report
 """
 
+import logging
 from state import AgentState
 
+log = logging.getLogger(__name__)
 
 _YIELD_FLOOR = 2.0      # below this is poor rental investment
 _YIELD_CEILING = 8.0    # above this may be unrealistically optimistic
@@ -78,13 +80,23 @@ def _audit_property(analysis: dict) -> dict:
 
 def auditor_agent(state: AgentState) -> dict:
     analyses = state["financial_analyses"]
-    print(f"[Auditor] Auditing {len(analyses)} properties for risks and compliance...")
+    log.info("[Auditor] Starting. %d properties to audit.", len(analyses))
 
     property_audits = [_audit_property(a) for a in analyses]
+
+    for audit in property_audits:
+        log.debug("[Auditor] %r → score=%d risk=%s flags=%s",
+                  audit["property_name"], audit["audit_score"],
+                  audit["risk_level"], audit["flags"])
 
     high_risk = [a for a in property_audits if a["risk_level"] == "HIGH"]
     medium_risk = [a for a in property_audits if a["risk_level"] == "MEDIUM"]
     low_risk = [a for a in property_audits if a["risk_level"] == "LOW"]
+
+    shortlisted = [a["property_name"] for a in low_risk + medium_risk]
+    log.info("[Auditor] Risk summary — HIGH: %d | MEDIUM: %d | LOW: %d | Shortlisted: %d",
+             len(high_risk), len(medium_risk), len(low_risk), len(shortlisted))
+    log.debug("[Auditor] Shortlisted properties: %s", shortlisted)
 
     audit_report = {
         "total_properties_reviewed": len(property_audits),
@@ -94,8 +106,7 @@ def auditor_agent(state: AgentState) -> dict:
             "low": len(low_risk),
         },
         "property_audits": property_audits,
-        "shortlisted": [a["property_name"] for a in low_risk + medium_risk],
+        "shortlisted": shortlisted,
     }
 
-    print(f"[Auditor] Risk summary — High: {len(high_risk)}, Medium: {len(medium_risk)}, Low: {len(low_risk)}")
     return {"audit_report": audit_report}

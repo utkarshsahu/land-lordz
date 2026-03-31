@@ -1,68 +1,88 @@
 """
-Fetches recent real estate news for a given location using SerpAPI.
+Generates real estate market news and regulatory context for Indian cities
+using a single LLM call.
 """
 
-import os
-from serpapi import GoogleSearch
+import json
+import logging
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
+from tools.geo_utils import resolve_city_state
+from tools.coerce import to_list, strip_markdown_fences
+
+log = logging.getLogger(__name__)
+_llm = None
 
 
-def get_real_estate_news(location: str, max_results: int = 6) -> list[dict]:
+def _get_llm() -> ChatOpenAI:
+    global _llm
+    if _llm is None:
+        _llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+    return _llm
+
+
+def get_market_news(location: str) -> dict:
     """
-    Returns recent news articles about the real estate market in a city.
-    Each item has: title, snippet, source, date (if available).
+    Single LLM call that returns:
+      - general_news: 5 key market dynamics / recent developments
+      - regulatory_news: 4 RERA / compliance points buyers must know
+
+    Each item has: title, snippet, source, link.
+    Returns dict with keys "general_news" and "regulatory_news".
     """
-    api_key = os.getenv("SERPAPI_API_KEY")
-    query = f"{location} real estate news property market 2024"
+    geo = resolve_city_state(location)
+    state = geo["state"]
+    rera_portal = geo["rera_portal"]
 
-    params = {
-        "engine": "google",
-        "q": query,
-        "api_key": api_key,
-        "tbm": "nws",          # news tab
-        "num": max_results,
-        "gl": "in",
-        "hl": "en",
-    }
+    prompt = f"""You are an Indian real estate analyst and compliance expert.
+For {location} ({state}), provide both of the following in a single JSON response:
 
-    results = GoogleSearch(params).get_dict()
-    articles = []
-    for item in results.get("news_results", []):
-        articles.append({
-            "title": item.get("title", ""),
-            "snippet": item.get("snippet", ""),
-            "source": item.get("source", ""),
-            "date": item.get("date", ""),
-            "link": item.get("link", ""),
-        })
+1. general_news — 5 key market dynamics or recent developments shaping residential
+   property in {location}. Cover infrastructure, price movements, new supply, builder
+   activity, demand shifts, NRI investment, or economic factors.
 
-    return articles[:max_results]
+2. regulatory_news — 4 essential RERA / compliance points a buyer in {location} must know.
+   Cover: registration requirements, builder compliance record, consumer protection
+   provisions, completion certificate norms, or {state}-specific rules.
 
+Each item must have:
+  "title": short headline (< 10 words)
+  "snippet": 2-sentence explanation with concrete data where possible
+  "source": name of a well-known Indian publication or portal
+    — for general_news use sources like: Economic Times, Anarock, JLL India, 99acres, Knight Frank India
+    — for regulatory_news use sources like: {rera_portal}, RERA India, Livemint, Housing.com
 
-def get_regulatory_news(location: str) -> list[dict]:
-    """
-    Fetches recent RERA / regulatory policy news for the location.
-    """
-    api_key = os.getenv("SERPAPI_API_KEY")
-    query = f"RERA {location} regulatory update builder compliance 2024"
+Respond with ONLY valid JSON (no markdown):
+{{
+  "general_news": [
+    {{"title": "...", "snippet": "...", "source": "..."}},
+    ... 5 items
+  ],
+  "regulatory_news": [
+    {{"title": "...", "snippet": "...", "source": "..."}},
+    ... 4 items
+  ]
+}}"""
 
-    params = {
-        "engine": "google",
-        "q": query,
-        "api_key": api_key,
-        "tbm": "nws",
-        "num": 4,
-        "gl": "in",
-        "hl": "en",
-    }
-
-    results = GoogleSearch(params).get_dict()
-    articles = []
-    for item in results.get("news_results", []):
-        articles.append({
-            "title": item.get("title", ""),
-            "snippet": item.get("snippet", ""),
-            "source": item.get("source", ""),
-            "date": item.get("date", ""),
-        })
-
-    return articles[:4]
+    try:
+        response = _get_llm().invoke([HumanMessage(content=prompt)])
+        raw = response.content
+        data = json.loads(strip_markdown_fences(raw))
+        data["general_news"] = to_list(data.get("general_news"))
+        data["regulatory_news"] = to_list(data.get("regulatory_news"))
+        log.info("[NewsEngine] News fetched for %r. general=%d regulatory=%d",
+                 location, len(data["general_news"]), len(data["regulatory_news"]))
+        return data
+    except json.JSONDecodeError as e:
+        log.error("[NewsEngine] JSON parse failed for %r: %s\nRaw response:\n%s",
+                  location, e, locals().get("raw", "N/A"))
+        return {
+            "general_news": [{"title": "Data unavailable", "snippet": f"Could not retrieve news for {location}.", "source": "", "link": ""}],
+            "regulatory_news": [{"title": "Data unavailable", "snippet": f"Could not retrieve RERA data for {location}.", "source": "", "link": ""}],
+        }
+    except AttributeError as e:
+        log.error("[NewsEngine] Unexpected error for %r: %s", location, e)
+        return {
+            "general_news": [{"title": "Data unavailable", "snippet": f"Could not retrieve news for {location}.", "source": "", "link": ""}],
+            "regulatory_news": [{"title": "Data unavailable", "snippet": f"Could not retrieve RERA data for {location}.", "source": "", "link": ""}],
+        }

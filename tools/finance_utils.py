@@ -3,6 +3,8 @@ Pure financial calculation utilities for Indian real estate.
 All monetary values are in INR.
 """
 
+from tools.coerce import to_float, to_str
+
 
 def calculate_emi(principal: float, annual_rate_pct: float, tenure_years: int) -> float:
     """Calculate monthly EMI using reducing-balance formula."""
@@ -54,7 +56,6 @@ def estimate_stamp_duty_and_registration(price_inr: float, state: str = "Maharas
     return {
         "stamp_duty_inr": stamp_duty,
         "registration_inr": registration,
-        "total_transaction_cost_inr": round(stamp_duty + registration, 2),
     }
 
 
@@ -68,27 +69,34 @@ def estimate_payback_years(
     return round(property_price_inr / annual_return, 1)
 
 
-def full_financial_profile(property: dict) -> dict:
+def full_financial_profile(property: dict, home_loan_rate_pct: float = 8.75) -> dict:
     """
     Generate a complete financial profile for a property dict.
     Expected keys: price_inr, area_sqft, monthly_rent_inr (optional),
                    annual_expenses_inr (optional), state (optional)
+    home_loan_rate_pct: live-fetched rate passed in by the analyst agent.
     """
-    price = property.get("price_inr", 0)
-    area = property.get("area_sqft", 0)
-    monthly_rent = property.get("monthly_rent_inr", 0)
+    price = to_float(property.get("price_inr"), 0.0)
+    area = to_float(property.get("area_sqft"), 0.0)
+    monthly_rent = to_float(property.get("monthly_rent_inr"), 0.0)
     annual_rent = monthly_rent * 12
-    annual_expenses = property.get("annual_expenses_inr", annual_rent * 0.15)  # 15% default
-    state = property.get("state", "Maharashtra")
+    annual_expenses = to_float(property.get("annual_expenses_inr"), annual_rent * 0.15)
+    state = to_str(property.get("state"), "Maharashtra") or "Maharashtra"
 
     loan_amount = price * 0.80  # 80% LTV
+    txn = estimate_stamp_duty_and_registration(price, state)
     return {
-        "price_inr": price,
-        "price_per_sqft": calculate_price_per_sqft(price, area),
-        "emi_8pct_20yr": calculate_emi(loan_amount, 8.5, 20),
+        "purchase_price_inr": price,
+        "carpet_area_sqft": area if area else None,
+        "price_per_sqft_inr": calculate_price_per_sqft(price, area),
+        "expected_monthly_rent_inr": monthly_rent,
         "gross_rental_yield_pct": calculate_gross_rental_yield(annual_rent, price),
         "cap_rate_pct": calculate_cap_rate(annual_rent, annual_expenses, price),
+        "emi_inr": calculate_emi(loan_amount, home_loan_rate_pct, 20),
+        "home_loan_rate_pct": home_loan_rate_pct,
+        "loan_tenure_years": 20,
+        "loan_amount_inr": loan_amount,
+        "stamp_duty_inr": txn["stamp_duty_inr"],
+        "registration_inr": txn["registration_inr"],
         "payback_years": estimate_payback_years(price, annual_rent),
-        "transaction_costs": estimate_stamp_duty_and_registration(price, state),
-        "total_investment_inr": price + estimate_stamp_duty_and_registration(price, state)["total_transaction_cost_inr"],
     }
